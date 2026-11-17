@@ -27,10 +27,10 @@ impl Client {
         e.connect_timeout(Duration::from_secs(15))?;
         e.low_speed_limit(1024)?; // abaixo de 1 kB/s por 30 s: conexão morta
         e.low_speed_time(Duration::from_secs(30))?;
-        Ok(Client(e))
+        Ok(Self(e))
     }
 
-    fn status(&mut self, what: &'static str) -> Result<()> {
+    fn status(&self, what: &'static str) -> Result<()> {
         match self.0.response_code()? {
             200..=299 => Ok(()),
             code => Err(Error::Status(code, what)),
@@ -156,12 +156,12 @@ impl Cache {
             .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
         let dir = base.join("pexels-rs");
         fs::create_dir_all(&dir).ok()?;
-        Some(Cache { dir, ttl })
+        Some(Self { dir, ttl })
     }
 
     #[cfg(test)]
-    pub(crate) fn at(dir: PathBuf, ttl: Duration) -> Self {
-        Cache { dir, ttl }
+    pub(crate) const fn at(dir: PathBuf, ttl: Duration) -> Self {
+        Self { dir, ttl }
     }
 
     fn path(&self, url: &str) -> PathBuf {
@@ -197,7 +197,7 @@ impl Cache {
 /// Esperas antes de repetir uma página recusada por limite ou falha passageira (403 de rajada, 429, 5xx, rede).
 const BACKOFF: [Duration; 2] = [Duration::from_secs(3), Duration::from_secs(8)];
 
-fn retryable(e: &Error) -> bool {
+const fn retryable(e: &Error) -> bool {
     matches!(e, Error::Status(403 | 429 | 500..=599, _) | Error::Curl(_))
 }
 

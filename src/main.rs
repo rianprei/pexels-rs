@@ -217,7 +217,7 @@ impl Source<'_> {
         }
     }
 
-    fn kind(&self) -> Option<Kind> {
+    const fn kind(&self) -> Option<Kind> {
         match self {
             Source::Search(k, _) | Source::Feed(k) => Some(*k),
             _ => None,

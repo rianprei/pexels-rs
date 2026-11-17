@@ -68,17 +68,17 @@ pub(crate) struct Pick {
 impl Pick {
     pub(crate) fn for_orientation(orientation: Option<&str>) -> Self {
         match orientation {
-            Some("portrait") => Pick {
+            Some("portrait") => Self {
                 min_height: 1280,
                 target_short: 1080,
                 portrait: Some(true),
             },
-            Some("landscape") => Pick {
+            Some("landscape") => Self {
                 min_height: 1080,
                 target_short: 1080,
                 portrait: Some(false),
             },
-            _ => Pick {
+            _ => Self {
                 min_height: 720,
                 target_short: 1080,
                 portrait: None,

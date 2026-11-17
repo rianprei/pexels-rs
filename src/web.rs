@@ -60,8 +60,8 @@ struct Query {
 }
 
 impl Query {
-    fn new(url: String) -> Self {
-        Query { url, sep: '?' }
+    const fn new(url: String) -> Self {
+        Self { url, sep: '?' }
     }
     fn add(&mut self, key: &str, value: &str) {
         self.url.push(self.sep);

@@ -17,12 +17,12 @@ pub(crate) enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Usage(m) => write!(f, "{m}"),
-            Error::Status(code, what) => write!(f, "{what}: HTTP {code}"),
-            Error::Curl(e) => write!(f, "falha de rede: {e}"),
-            Error::Layout(m) => write!(f, "página em formato inesperado: {m}"),
-            Error::Json(e) => write!(f, "JSON inválido: {e}"),
-            Error::Io(path, e) => write!(f, "{path}: {e}"),
+            Self::Usage(m) => write!(f, "{m}"),
+            Self::Status(code, what) => write!(f, "{what}: HTTP {code}"),
+            Self::Curl(e) => write!(f, "falha de rede: {e}"),
+            Self::Layout(m) => write!(f, "página em formato inesperado: {m}"),
+            Self::Json(e) => write!(f, "JSON inválido: {e}"),
+            Self::Io(path, e) => write!(f, "{path}: {e}"),
         }
     }
 }
@@ -30,23 +30,23 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Error::Json(e) => Some(e),
-            Error::Curl(e) => Some(e),
-            Error::Io(_, e) => Some(e),
-            Error::Usage(_) | Error::Status(..) | Error::Layout(_) => None,
+            Self::Json(e) => Some(e),
+            Self::Curl(e) => Some(e),
+            Self::Io(_, e) => Some(e),
+            Self::Usage(_) | Self::Status(..) | Self::Layout(_) => None,
         }
     }
 }
 
 impl From<curl::Error> for Error {
     fn from(e: curl::Error) -> Self {
-        Error::Curl(e)
+        Self::Curl(e)
     }
 }
 
 impl From<serde_json::Error> for Error {
     fn from(e: serde_json::Error) -> Self {
-        Error::Json(e)
+        Self::Json(e)
     }
 }
 

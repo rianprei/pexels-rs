@@ -5,6 +5,10 @@ edition = "2021"
 rust-version = "1.82"
 description = "Busca e download de vídeos e fotos da Pexels: página pública de busca (sem chave) ou API oficial (com chave)"
 license = "MIT"
+repository = "https://github.com/rianprei/pexels-rs"
+readme = "README.md"
+keywords = ["pexels", "stock", "video", "photo", "cli"]
+categories = ["command-line-utilities", "multimedia"]
 
 [dependencies]
 memchr = "2"
@@ -30,6 +34,12 @@ rust_2018_idioms = { level = "warn", priority = -1 }
 [lints.clippy]
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+# contradiz o `unreachable_pub` do rustc, que é o adotado: num binário, `pub(crate)` diz a verdade sobre o alcance
+redundant_pub_crate = "allow"
+# versões duplicadas vêm de dependências transitivas da libcurl, fora do nosso controle
+multiple_crate_versions = "allow"
 unwrap_used = "warn"
 expect_used = "allow"
 panic_in_result_fn = "warn"
