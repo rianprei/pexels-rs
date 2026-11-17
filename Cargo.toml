@@ -1,0 +1,19 @@
+[package]
+name = "pexels-rs"
+version = "0.3.0"
+edition = "2021"
+description = "Busca e download de vídeos e fotos da Pexels: página pública de busca (sem chave) ou API oficial (com chave)"
+license = "MIT"
+
+[dependencies]
+memchr = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+curl = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
