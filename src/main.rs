@@ -6,7 +6,7 @@ mod net;
 mod web;
 
 use error::{Error, Result};
-use model::{Filter, Pick, Row};
+use model::{Filter, Pick};
 use net::{Cache, Client};
 use serde::Serialize;
 use std::collections::HashSet;
@@ -56,20 +56,37 @@ struct Args<'a>(&'a [String]);
 
 impl<'a> Args<'a> {
     fn value(&self, name: &str) -> Option<&'a str> {
-        self.0.iter().position(|a| a == name).and_then(|i| self.0.get(i + 1)).map(String::as_str)
+        self.0
+            .iter()
+            .position(|a| a == name)
+            .and_then(|i| self.0.get(i + 1))
+            .map(String::as_str)
     }
     fn values(&self, name: &str) -> Vec<String> {
-        self.0.windows(2).filter(|w| w[0] == name).map(|w| w[1].to_lowercase()).collect()
+        self.0
+            .windows(2)
+            .filter(|w| w[0] == name)
+            .map(|w| w[1].to_lowercase())
+            .collect()
     }
     fn has(&self, name: &str) -> bool {
         self.0.iter().any(|a| a == name)
     }
     fn num<T: std::str::FromStr>(&self, name: &str) -> Result<Option<T>> {
-        self.value(name).map(|v| v.parse().map_err(|_| Error::Usage(format!("{name} precisa ser um número")))).transpose()
+        self.value(name)
+            .map(|v| {
+                v.parse()
+                    .map_err(|_| Error::Usage(format!("{name} precisa ser um número, veio: {v}")))
+            })
+            .transpose()
     }
     /// Argumento posicional `i` (0 = subcomando). Um valor começando por `--` não é posicional.
     fn pos(&self, i: usize) -> Result<&'a str> {
-        self.0.get(i).map(String::as_str).filter(|v| !v.starts_with("--")).ok_or_else(|| Error::Usage(USAGE.into()))
+        self.0
+            .get(i)
+            .map(String::as_str)
+            .filter(|v| !v.starts_with("--"))
+            .ok_or_else(|| Error::Usage(USAGE.into()))
     }
 }
 
@@ -77,8 +94,26 @@ fn kind(s: &str) -> Result<Kind> {
     match s {
         "video" | "videos" => Ok(Kind::Videos),
         "photo" | "photos" => Ok(Kind::Photos),
-        other => Err(Error::Usage(format!("esperava video ou photo, veio: {other}"))),
+        other => Err(Error::Usage(format!(
+            "esperava video ou photo, veio: {other}"
+        ))),
     }
+}
+
+/// De onde vêm os dados.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Backend {
+    /// Páginas públicas do site, sem chave.
+    Web,
+    /// API oficial, com `PEXELS_API_KEY`.
+    Api,
+}
+
+/// O que `get` e `similar` tiram da página de detalhe.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Detail {
+    Media,
+    Similar,
 }
 
 struct Opts<'a> {
@@ -87,7 +122,7 @@ struct Opts<'a> {
     filter: Filter,
     page: u32,
     limit: Option<usize>,
-    api: bool,
+    backend: Backend,
     cache: Option<Cache>,
 }
 
@@ -98,19 +133,48 @@ fn opts<'a>(a: &Args<'a>) -> Result<Opts<'a>> {
     pick.target_short = a.num("--target-short")?.unwrap_or(pick.target_short);
     let only = match a.value("--only") {
         None => None,
-        Some(v) => Some(if kind(v)? == Kind::Videos { "video" } else { "photo" }),
+        Some(v) => Some(if kind(v)? == Kind::Videos {
+            "video"
+        } else {
+            "photo"
+        }),
     };
-    let cache = if a.has("--no-cache") { None } else { Cache::open(Duration::from_secs(a.num("--cache-ttl")?.unwrap_or(21_600))) };
+    let cache = if a.has("--no-cache") {
+        None
+    } else {
+        Cache::open(Duration::from_secs(a.num("--cache-ttl")?.unwrap_or(21_600)))
+    };
     Ok(Opts {
-        server: Server { orientation, color: a.value("--color"), people: a.value("--people"), age: a.value("--age"), date_from: a.value("--date-from"),
-                         min_duration: a.num("--min-duration")?, max_duration: a.num("--max-duration")? },
-        shape: Shape { pick, photo_width: a.num("--photo-width")?.unwrap_or(2160u32).clamp(320, 6000), all_files: a.has("--files") },
-        filter: Filter { only, min_width: a.num("--min-width")?.unwrap_or(0), min_fps: a.num("--min-fps")?.unwrap_or(0.0),
-                         min_duration: a.num("--longer-than")?.unwrap_or(0.0), max_duration: a.num("--shorter-than")?.unwrap_or(0.0),
-                         with: a.values("--with"), without: a.values("--without") },
+        server: Server {
+            orientation,
+            color: a.value("--color"),
+            people: a.value("--people"),
+            age: a.value("--age"),
+            date_from: a.value("--date-from"),
+            min_duration: a.num("--min-duration")?,
+            max_duration: a.num("--max-duration")?,
+        },
+        shape: Shape {
+            pick,
+            photo_width: a.num("--photo-width")?.unwrap_or(2160u32).clamp(320, 6000),
+            all_files: a.has("--files"),
+        },
+        filter: Filter {
+            only,
+            min_width: a.num("--min-width")?.unwrap_or(0),
+            min_fps: a.num("--min-fps")?.unwrap_or(0.0),
+            min_duration: a.num("--longer-than")?.unwrap_or(0.0),
+            max_duration: a.num("--shorter-than")?.unwrap_or(0.0),
+            with: a.values("--with"),
+            without: a.values("--without"),
+        },
         page: a.num("--page")?.unwrap_or(1u32).max(1),
         limit: a.num("--limit")?,
-        api: a.has("--api"),
+        backend: if a.has("--api") {
+            Backend::Api
+        } else {
+            Backend::Web
+        },
         cache,
     })
 }
@@ -135,17 +199,19 @@ enum Source<'a> {
 impl Source<'_> {
     /// Populares e curadoria usam cursor, e a coleção ignora `page` (medido em 17/11/2026: a página 2 repete a 1):
     /// no HTML público essas três só expõem a primeira página (18, 12 e 12 itens).
-    fn paged(&self, api: bool) -> bool {
-        api || matches!(self, Source::Search(..) | Source::User(_))
+    fn paged(&self, backend: Backend) -> bool {
+        backend == Backend::Api || matches!(self, Source::Search(..) | Source::User(_))
     }
 
     fn url(&self, page: u32, o: &Opts<'_>) -> Result<String> {
-        match (self, o.api) {
-            (Source::Search(k, q), true) => api::search_url(*k, q, page, 80, o.server.orientation),
-            (Source::Search(k, q), false) => web::search_url(*k, q, page, &o.server),
-            (Source::Feed(k), true) => Ok(api::feed_url(*k, page, 80)),
-            (Source::Feed(Kind::Videos), false) => Ok(web::POPULAR_VIDEOS.into()),
-            (Source::Feed(Kind::Photos), false) => Ok(web::CURATED_PHOTOS.into()),
+        match (self, o.backend) {
+            (Source::Search(k, q), Backend::Api) => {
+                api::search_url(*k, q, page, 80, o.server.orientation)
+            }
+            (Source::Search(k, q), Backend::Web) => web::search_url(*k, q, page, &o.server),
+            (Source::Feed(k), Backend::Api) => Ok(api::feed_url(*k, page, 80)),
+            (Source::Feed(Kind::Videos), Backend::Web) => Ok(web::POPULAR_VIDEOS.into()),
+            (Source::Feed(Kind::Photos), Backend::Web) => Ok(web::CURATED_PHOTOS.into()),
             (Source::Collection(c), _) => web::collection_url(c, page),
             (Source::User(u), _) => web::user_url(u, page),
         }
@@ -161,16 +227,24 @@ impl Source<'_> {
 
 /// Percorre as páginas de uma fonte e emite as linhas aceitas, sem repetir ids, até `--limit` (ou uma página, sem o limite).
 fn list(source: &Source<'_>, o: &Opts<'_>) -> Result<()> {
-    let key = if o.api {
+    let api = o.backend == Backend::Api;
+    let key = if api {
         if matches!(source, Source::Collection(_) | Source::User(_)) {
-            return Err(Error::Usage("--api só vale para videos, photos, popular e curated".into()));
+            return Err(Error::Usage(
+                "--api só vale para videos, photos, popular e curated".into(),
+            ));
         }
-        Some(env::var("PEXELS_API_KEY").ok().filter(|k| !k.trim().is_empty()).ok_or_else(|| Error::Usage("--api exige PEXELS_API_KEY".into()))?)
+        Some(
+            env::var("PEXELS_API_KEY")
+                .ok()
+                .filter(|k| !k.trim().is_empty())
+                .ok_or_else(|| Error::Usage("--api exige PEXELS_API_KEY".into()))?,
+        )
     } else {
         None
     };
     let key = key.as_deref().map(str::trim);
-    let cache = if o.api { None } else { o.cache.as_ref() }; // respostas autenticadas não vão para o disco
+    let cache = if api { None } else { o.cache.as_ref() }; // respostas autenticadas não vão para o disco
     let want = o.limit.unwrap_or(usize::MAX);
     let mut client = Client::new()?;
     let mut out = BufWriter::with_capacity(1 << 16, io::stdout().lock());
@@ -182,12 +256,22 @@ fn list(source: &Source<'_>, o: &Opts<'_>) -> Result<()> {
         }
         let (body, from_network) = client.page(&url, key, cache)?;
         hit_network = from_network;
-        let (rows, items, total_pages) = if o.api {
-            let rows = api::parse(&body, source.kind().unwrap_or(Kind::Videos), o.shape.pick, o.shape.photo_width)?;
+        let (rows, items, total_pages) = if api {
+            let rows = api::parse(
+                &body,
+                source.kind().unwrap_or(Kind::Videos),
+                o.shape.pick,
+                o.shape.photo_width,
+            )?;
             let n = rows.len();
             (rows, n, u32::MAX)
         } else {
-            let Listing { rows, items, pagination, .. } = web::parse_list(&body, &o.shape)?;
+            let Listing {
+                rows,
+                items,
+                pagination,
+                ..
+            } = web::parse_list(&body, &o.shape)?;
             (rows, items, pagination.map_or(1, |p| p.total_pages))
         };
         // uma página que só repete ids já vistos significa que a fonte parou de avançar
@@ -205,7 +289,7 @@ fn list(source: &Source<'_>, o: &Opts<'_>) -> Result<()> {
         if emitted >= want || o.limit.is_none() || items == 0 || !fresh || page >= total_pages {
             break;
         }
-        if !source.paged(o.api) {
+        if !source.paged(o.backend) {
             eprintln!("pexels-rs: esta lista só expõe a primeira página no site; {emitted} resultado(s) de {want} pedidos");
             break;
         }
@@ -213,19 +297,34 @@ fn list(source: &Source<'_>, o: &Opts<'_>) -> Result<()> {
     out.flush().map_err(stdout_err)
 }
 
-fn detail(k: Kind, id: &str, o: &Opts<'_>, similar: bool) -> Result<()> {
-    let id: u64 = id.parse().map_err(|_| Error::Usage(format!("id precisa ser numérico: {id}")))?;
+fn detail(k: Kind, id: &str, o: &Opts<'_>, what: Detail) -> Result<()> {
+    let id: u64 = id
+        .parse()
+        .map_err(|_| Error::Usage(format!("id precisa ser numérico: {id}")))?;
     let (body, _) = Client::new()?.page(&web::media_url(k, id), None, o.cache.as_ref())?;
     // no detalhe, todas as rendições fazem parte da resposta
-    let shape = Shape { all_files: !similar || o.shape.all_files, ..o.shape };
+    let shape = Shape {
+        all_files: what == Detail::Media || o.shape.all_files,
+        ..o.shape
+    };
     let (row, similar_rows) = web::parse_detail(&body, &shape)?;
     let mut out = BufWriter::new(io::stdout().lock());
-    if similar {
-        for r in similar_rows.rows.iter().filter(|r| o.filter.accepts(r)).take(o.limit.unwrap_or(usize::MAX)) {
+    if what == Detail::Similar {
+        for r in similar_rows
+            .rows
+            .iter()
+            .filter(|r| o.filter.accepts(r))
+            .take(o.limit.unwrap_or(usize::MAX))
+        {
             emit(&mut out, r)?;
         }
     } else {
-        emit(&mut out, &row.ok_or(Error::Layout("mídia sem arquivo que atenda a --min-height/--orientation"))?)?;
+        emit(
+            &mut out,
+            &row.ok_or(Error::Layout(
+                "mídia sem arquivo que atenda a --min-height/--orientation",
+            ))?,
+        )?;
     }
     out.flush().map_err(stdout_err)
 }
@@ -237,16 +336,36 @@ fn parse_file(mode: &str, path: &str, o: &Opts<'_>) -> Result<()> {
         "list" => {
             let l = web::parse_list(&html, &o.shape)?;
             if let Some(p) = l.pagination {
-                eprintln!("página {} de {} ({} resultados)", p.current_page, p.total_pages, p.total_results);
+                eprintln!(
+                    "página {} de {} ({} resultados)",
+                    p.current_page, p.total_pages, p.total_results
+                );
             }
-            l.rows.iter().filter(|r| o.filter.accepts(r)).try_for_each(|r| emit(&mut out, r))?;
+            l.rows
+                .iter()
+                .filter(|r| o.filter.accepts(r))
+                .try_for_each(|r| emit(&mut out, r))?;
         }
         "detail" => {
-            let (row, similar) = web::parse_detail(&html, &Shape { all_files: true, ..o.shape })?;
-            row.iter().chain(similar.rows.iter()).try_for_each(|r| emit(&mut out, r))?;
+            let (row, similar) = web::parse_detail(
+                &html,
+                &Shape {
+                    all_files: true,
+                    ..o.shape
+                },
+            )?;
+            row.iter()
+                .chain(similar.rows.iter())
+                .try_for_each(|r| emit(&mut out, r))?;
         }
-        "collections" => web::parse_collections(&html)?.iter().try_for_each(|c| emit(&mut out, c))?,
-        other => return Err(Error::Usage(format!("parse: esperava list, detail ou collections, veio: {other}"))),
+        "collections" => web::parse_collections(&html)?
+            .iter()
+            .try_for_each(|c| emit(&mut out, c))?,
+        other => {
+            return Err(Error::Usage(format!(
+                "parse: esperava list, detail ou collections, veio: {other}"
+            )))
+        }
     }
     out.flush().map_err(stdout_err)
 }
@@ -273,19 +392,24 @@ fn run(argv: &[String]) -> Result<()> {
         "curated" => list(&Source::Feed(Kind::Photos), &o),
         "collection" => list(&Source::Collection(a.pos(1)?), &o),
         "user" => list(&Source::User(a.pos(1)?), &o),
-        "get" => detail(kind(a.pos(1)?)?, a.pos(2)?, &o, false),
-        "similar" => detail(kind(a.pos(1)?)?, a.pos(2)?, &o, true),
+        "get" => detail(kind(a.pos(1)?)?, a.pos(2)?, &o, Detail::Media),
+        "similar" => detail(kind(a.pos(1)?)?, a.pos(2)?, &o, Detail::Similar),
         "related" => {
             let url = web::search_url(Kind::Videos, a.pos(1)?, 1, &Server::default())?;
             let (body, _) = Client::new()?.page(&url, None, o.cache.as_ref())?;
             let mut out = BufWriter::new(io::stdout().lock());
-            web::parse_list(&body, &o.shape)?.related.iter().try_for_each(|r| emit(&mut out, r))?;
+            web::parse_list(&body, &o.shape)?
+                .related
+                .iter()
+                .try_for_each(|r| emit(&mut out, r))?;
             out.flush().map_err(stdout_err)
         }
         "collections" => {
             let (body, _) = Client::new()?.page(web::DISCOVER, None, o.cache.as_ref())?;
             let mut out = BufWriter::new(io::stdout().lock());
-            web::parse_collections(&body)?.iter().try_for_each(|c| emit(&mut out, c))?;
+            web::parse_collections(&body)?
+                .iter()
+                .try_for_each(|c| emit(&mut out, c))?;
             out.flush().map_err(stdout_err)
         }
         "parse" => parse_file(a.pos(1)?, a.pos(2)?, &o),
@@ -303,9 +427,3 @@ fn main() -> ExitCode {
         }
     }
 }
-
-// Row é usado nas assinaturas dos módulos; aqui só garante que o tipo de saída continua serializável.
-const _: fn() = || {
-    fn assert_serialize<T: Serialize>() {}
-    assert_serialize::<Row<'static>>();
-};

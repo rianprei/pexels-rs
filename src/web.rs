@@ -1,43 +1,45 @@
 //! Fonte sem chave: as páginas públicas da Pexels trazem os dados em JSON dentro de `<script id="__NEXT_DATA__">`.
 //! Uma requisição por página, como um navegador faria. Sem login, sem credencial.
 use crate::error::{Error, Result};
-use crate::model::{FileRow, Pick, Row};
+use crate::model::{scaled_height, FileRow, Pick, Row};
 use memchr::memmem;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use std::borrow::Cow;
 
-pub const SITE: &str = "https://www.pexels.com";
+pub(crate) const SITE: &str = "https://www.pexels.com";
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub enum Kind {
+pub(crate) enum Kind {
     Videos,
     Photos,
 }
 
 /// Filtros que o próprio site aplica (viram parâmetros da URL de busca).
 #[derive(Debug, Default, Clone, Copy)]
-pub struct Server<'a> {
-    pub orientation: Option<&'a str>,
+pub(crate) struct Server<'a> {
+    pub(crate) orientation: Option<&'a str>,
     /// Cor dominante da foto: seis dígitos hexadecimais.
-    pub color: Option<&'a str>,
-    pub people: Option<&'a str>,
-    pub age: Option<&'a str>,
-    pub date_from: Option<&'a str>,
-    pub min_duration: Option<u32>,
-    pub max_duration: Option<u32>,
+    pub(crate) color: Option<&'a str>,
+    pub(crate) people: Option<&'a str>,
+    pub(crate) age: Option<&'a str>,
+    pub(crate) date_from: Option<&'a str>,
+    pub(crate) min_duration: Option<u32>,
+    pub(crate) max_duration: Option<u32>,
 }
 
 /// Percent-encoding (RFC 3986): só os caracteres não reservados passam.
-pub fn encode_into(out: &mut String, s: &str) {
+pub(crate) fn encode_into(out: &mut String, s: &str) {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(char::from(b));
+            }
             _ => {
                 out.push('%');
-                out.push(HEX[(b >> 4) as usize] as char);
-                out.push(HEX[(b & 15) as usize] as char);
+                out.push(char::from(HEX[usize::from(b >> 4)]));
+                out.push(char::from(HEX[usize::from(b & 15)]));
             }
         }
     }
@@ -77,14 +79,18 @@ impl Query {
     }
 }
 
-pub fn search_url(kind: Kind, query: &str, page: u32, f: &Server<'_>) -> Result<String> {
+pub(crate) fn search_url(kind: Kind, query: &str, page: u32, f: &Server<'_>) -> Result<String> {
     let query = query.trim();
     if query.is_empty() {
         return Err(Error::Usage("consulta vazia".into()));
     }
     let mut url = String::with_capacity(128 + query.len() * 3);
     url.push_str(SITE);
-    url.push_str(if kind == Kind::Videos { "/search/videos/" } else { "/search/" });
+    url.push_str(if kind == Kind::Videos {
+        "/search/videos/"
+    } else {
+        "/search/"
+    });
     encode_into(&mut url, query);
     url.push('/');
     let mut q = Query::new(url);
@@ -96,7 +102,9 @@ pub fn search_url(kind: Kind, query: &str, page: u32, f: &Server<'_>) -> Result<
     }
     if let Some(c) = f.color {
         if c.len() != 6 || !c.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(Error::Usage(format!("color precisa de 6 dígitos hexadecimais (ex.: 0000ff): {c}")));
+            return Err(Error::Usage(format!(
+                "color precisa de 6 dígitos hexadecimais (ex.: 0000ff): {c}"
+            )));
         }
         q.add("color", c);
     }
@@ -119,37 +127,60 @@ pub fn search_url(kind: Kind, query: &str, page: u32, f: &Server<'_>) -> Result<
 }
 
 /// Página de um vídeo ou foto. O site aceita qualquer texto antes do id e redireciona para o endereço canônico.
-pub fn media_url(kind: Kind, id: u64) -> String {
-    format!("{SITE}/{}/x-{id}/", if kind == Kind::Videos { "video" } else { "photo" })
+pub(crate) fn media_url(kind: Kind, id: u64) -> String {
+    format!(
+        "{SITE}/{}/x-{id}/",
+        if kind == Kind::Videos {
+            "video"
+        } else {
+            "photo"
+        }
+    )
 }
 
 /// Aceita `animals-h8stntd`, `@usuario` ou só o nome: letras, dígitos, `-`, `_` e `.`.
 fn slug<'a>(name: &str, v: &'a str) -> Result<&'a str> {
     let v = v.trim_matches('/');
-    if !v.is_empty() && v.len() <= 120 && v.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.')) {
+    if !v.is_empty()
+        && v.len() <= 120
+        && v.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    {
         Ok(v)
     } else {
         Err(Error::Usage(format!("{name} inválido: {v}")))
     }
 }
 
-pub fn collection_url(collection: &str, page: u32) -> Result<String> {
-    Ok(Query::new(format!("{SITE}/collections/{}/", slug("coleção", collection)?)).page(page))
+pub(crate) fn collection_url(collection: &str, page: u32) -> Result<String> {
+    Ok(Query::new(format!(
+        "{SITE}/collections/{}/",
+        slug("coleção", collection)?
+    ))
+    .page(page))
 }
 
-pub fn user_url(user: &str, page: u32) -> Result<String> {
-    Ok(Query::new(format!("{SITE}/@{}/", slug("usuário", user.trim_start_matches('@'))?)).page(page))
+pub(crate) fn user_url(user: &str, page: u32) -> Result<String> {
+    Ok(Query::new(format!(
+        "{SITE}/@{}/",
+        slug("usuário", user.trim_start_matches('@'))?
+    ))
+    .page(page))
 }
 
-pub const POPULAR_VIDEOS: &str = "https://www.pexels.com/videos/";
-pub const CURATED_PHOTOS: &str = "https://www.pexels.com/";
-pub const DISCOVER: &str = "https://www.pexels.com/discover/";
+pub(crate) const POPULAR_VIDEOS: &str = "https://www.pexels.com/videos/";
+pub(crate) const CURATED_PHOTOS: &str = "https://www.pexels.com/";
+pub(crate) const DISCOVER: &str = "https://www.pexels.com/discover/";
 
 /// Recorta o JSON de `__NEXT_DATA__` do HTML sem interpretar o HTML (busca de substring vetorizada).
-pub fn next_data(html: &[u8]) -> Result<&[u8]> {
-    let tag = memmem::find(html, b"id=\"__NEXT_DATA__\"").ok_or(Error::Layout("sem __NEXT_DATA__ (bloqueio ou site alterado)"))?;
-    let start = tag + memchr::memchr(b'>', &html[tag..]).ok_or(Error::Layout("tag de script aberta"))? + 1;
-    let len = memmem::find(&html[start..], b"</script>").ok_or(Error::Layout("script sem fechamento"))?;
+pub(crate) fn next_data(html: &[u8]) -> Result<&[u8]> {
+    let tag = memmem::find(html, b"id=\"__NEXT_DATA__\"").ok_or(Error::Layout(
+        "sem __NEXT_DATA__ (bloqueio ou site alterado)",
+    ))?;
+    let start =
+        tag + memchr::memchr(b'>', &html[tag..]).ok_or(Error::Layout("tag de script aberta"))? + 1;
+    let len =
+        memmem::find(&html[start..], b"</script>").ok_or(Error::Layout("script sem fechamento"))?;
     Ok(&html[start..start + len])
 }
 
@@ -213,21 +244,21 @@ struct Meta<'a> {
 }
 /// Busca relacionada sugerida pelo site, com o número de resultados que ela tem.
 #[derive(Deserialize, Serialize, Debug, PartialEq)]
-pub struct Related<'a> {
+pub(crate) struct Related<'a> {
     #[serde(borrow)]
-    pub term: Cow<'a, str>,
+    pub(crate) term: Cow<'a, str>,
     #[serde(default)]
-    pub count: u64,
+    pub(crate) count: u64,
 }
 /// Paginação numerada (busca, coleção, autor, parecidos). Populares e curadoria usam cursor e só expõem a primeira página.
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq, Default)]
-pub struct Pagination {
+pub(crate) struct Pagination {
     #[serde(default)]
-    pub current_page: u32,
+    pub(crate) current_page: u32,
     #[serde(default)]
-    pub total_pages: u32,
+    pub(crate) total_pages: u32,
     #[serde(default)]
-    pub total_results: u64,
+    pub(crate) total_results: u64,
 }
 #[derive(Deserialize)]
 struct Item<'a> {
@@ -319,11 +350,11 @@ struct Image<'a> {
 
 /// Como transformar um item em linha.
 #[derive(Debug, Clone, Copy)]
-pub struct Shape {
-    pub pick: Pick,
-    pub photo_width: u32,
+pub(crate) struct Shape {
+    pub(crate) pick: Pick,
+    pub(crate) photo_width: u32,
     /// Incluir todas as rendições mp4 do vídeo em `files`.
-    pub all_files: bool,
+    pub(crate) all_files: bool,
 }
 
 /// Vídeo sem arquivo que sirva a `pick`, foto sem link e tipos desconhecidos devolvem `None`.
@@ -333,10 +364,27 @@ fn to_row<'a>(item: Item<'a>, shape: &Shape) -> Option<Row<'a>> {
         "video" => {
             let mut files = a.video?.video_files;
             files.retain(|f| f.file_type.as_deref() == Some("video/mp4"));
-            let i = shape.pick.best(files.iter().map(|f| (f.width.unwrap_or(0), f.height.unwrap_or(0))))?;
-            let (url, w, h, fps) = (files[i].link.clone(), files[i].width.unwrap_or(0), files[i].height.unwrap_or(0), files[i].fps.or(a.fps));
+            let i = shape.pick.best(
+                files
+                    .iter()
+                    .map(|f| (f.width.unwrap_or(0), f.height.unwrap_or(0))),
+            )?;
+            let (url, w, h, fps) = (
+                files[i].link.clone(),
+                files[i].width.unwrap_or(0),
+                files[i].height.unwrap_or(0),
+                files[i].fps.or(a.fps),
+            );
             let all = if shape.all_files {
-                files.into_iter().map(|f| FileRow { url: f.link, width: f.width.unwrap_or(0), height: f.height.unwrap_or(0), fps: f.fps }).collect()
+                files
+                    .into_iter()
+                    .map(|f| FileRow {
+                        url: f.link,
+                        width: f.width.unwrap_or(0),
+                        height: f.height.unwrap_or(0),
+                        fps: f.fps,
+                    })
+                    .collect()
             } else {
                 Vec::new()
             };
@@ -347,18 +395,44 @@ fn to_row<'a>(item: Item<'a>, shape: &Shape) -> Option<Row<'a>> {
             // o original pode ter 50 MP; o CDN redimensiona pelo parâmetro `w`
             let base = src.split('?').next().unwrap_or(&src);
             let (w, h) = (a.width.unwrap_or(0), a.height.unwrap_or(0));
-            let out_w = if w == 0 { shape.photo_width } else { w.min(shape.photo_width) };
-            let out_h = if w == 0 { 0 } else { (u64::from(h) * u64::from(out_w) / u64::from(w)) as u32 };
-            ("photo", Cow::Owned(format!("{base}?auto=compress&cs=tinysrgb&w={out_w}")), out_w, out_h, None, Vec::new())
+            let out_w = if w == 0 {
+                shape.photo_width
+            } else {
+                w.min(shape.photo_width)
+            };
+            let out_h = scaled_height(w, h, out_w);
+            (
+                "photo",
+                Cow::Owned(format!("{base}?auto=compress&cs=tinysrgb&w={out_w}")),
+                out_w,
+                out_h,
+                None,
+                Vec::new(),
+            )
         }
         _ => return None,
     };
-    let author = a.user.map(|u| [u.first_name.as_deref().unwrap_or(""), u.last_name.as_deref().unwrap_or("")].join(" ").trim().to_owned()).unwrap_or_default();
+    let author = a
+        .user
+        .map(|u| {
+            [
+                u.first_name.as_deref().unwrap_or(""),
+                u.last_name.as_deref().unwrap_or(""),
+            ]
+            .join(" ")
+            .trim()
+            .to_owned()
+        })
+        .unwrap_or_default();
     let slug = a.slug.as_deref().unwrap_or("");
     Some(Row {
         id: a.id,
         kind,
-        page: if slug.is_empty() { format!("{SITE}/{kind}/{}/", a.id) } else { format!("{SITE}/{kind}/{slug}-{}/", a.id) },
+        page: if slug.is_empty() {
+            format!("{SITE}/{kind}/{}/", a.id)
+        } else {
+            format!("{SITE}/{kind}/{slug}-{}/", a.id)
+        },
         url,
         width,
         height,
@@ -376,35 +450,52 @@ fn to_row<'a>(item: Item<'a>, shape: &Shape) -> Option<Row<'a>> {
 }
 
 /// Resultado de uma página de lista.
-pub struct Listing<'a> {
-    pub rows: Vec<Row<'a>>,
+pub(crate) struct Listing<'a> {
+    pub(crate) rows: Vec<Row<'a>>,
     /// Itens que a página trouxe, antes de descartar os sem arquivo utilizável.
-    pub items: usize,
-    pub pagination: Option<Pagination>,
-    pub related: Vec<Related<'a>>,
+    pub(crate) items: usize,
+    pub(crate) pagination: Option<Pagination>,
+    pub(crate) related: Vec<Related<'a>>,
 }
 
 fn props(html: &[u8]) -> Result<PageProps<'_>> {
-    Ok(serde_json::from_slice::<Page<'_>>(next_data(html)?)?.props.page_props)
+    Ok(serde_json::from_slice::<Page<'_>>(next_data(html)?)?
+        .props
+        .page_props)
 }
 
 fn listing<'a>(list: List<'a>, shape: &Shape) -> Listing<'a> {
     let items = list.data.len();
-    Listing { rows: list.data.into_iter().filter_map(|i| to_row(i, shape)).collect(), items, pagination: list.pagination,
-              related: list.meta.map(|m| m.related_searches).unwrap_or_default() }
+    Listing {
+        rows: list
+            .data
+            .into_iter()
+            .filter_map(|i| to_row(i, shape))
+            .collect(),
+        items,
+        pagination: list.pagination,
+        related: list.meta.map(|m| m.related_searches).unwrap_or_default(),
+    }
 }
 
 /// Busca, populares, curadoria, coleção ou perfil de autor: qualquer página que liste mídia.
-pub fn parse_list<'a>(html: &'a [u8], shape: &Shape) -> Result<Listing<'a>> {
+pub(crate) fn parse_list<'a>(html: &'a [u8], shape: &Shape) -> Result<Listing<'a>> {
     let p = props(html)?;
-    let list = p.initial_data.or(p.user_media).ok_or(Error::Layout("página sem lista de mídia (consulta recusada ou endereço errado?)"))?;
+    let list = p.initial_data.or(p.user_media).ok_or(Error::Layout(
+        "página sem lista de mídia (consulta recusada ou endereço errado?)",
+    ))?;
     Ok(listing(list, shape))
 }
 
 /// Página de detalhe: a mídia com estatísticas e detalhes, e a primeira página de mídia parecida.
-pub fn parse_detail<'a>(html: &'a [u8], shape: &Shape) -> Result<(Option<Row<'a>>, Listing<'a>)> {
+pub(crate) fn parse_detail<'a>(
+    html: &'a [u8],
+    shape: &Shape,
+) -> Result<(Option<Row<'a>>, Listing<'a>)> {
     let p = props(html)?;
-    let medium = p.medium.ok_or(Error::Layout("página sem a mídia (id inexistente?)"))?;
+    let medium = p
+        .medium
+        .ok_or(Error::Layout("página sem a mídia (id inexistente?)"))?;
     let mut row = to_row(medium, shape);
     if let Some(r) = row.as_mut() {
         if let Some(Wrapped { attributes: s }) = p.stats {
@@ -412,25 +503,33 @@ pub fn parse_detail<'a>(html: &'a [u8], shape: &Shape) -> Result<(Option<Row<'a>
         }
         r.details = p.details.map(|d| d.attributes);
     }
-    let similar = p.similar.map(|l| listing(l, shape)).unwrap_or(Listing { rows: Vec::new(), items: 0, pagination: None, related: Vec::new() });
+    let similar = p.similar.map_or(
+        Listing {
+            rows: Vec::new(),
+            items: 0,
+            pagination: None,
+            related: Vec::new(),
+        },
+        |l| listing(l, shape),
+    );
     Ok((row, similar))
 }
 
 /// Uma coleção da página Descobrir.
 #[derive(Deserialize, Serialize, Debug, PartialEq)]
-pub struct Collection<'a> {
+pub(crate) struct Collection<'a> {
     #[serde(borrow)]
-    pub slug: Cow<'a, str>,
+    pub(crate) slug: Cow<'a, str>,
     #[serde(borrow, default)]
-    pub title: Cow<'a, str>,
+    pub(crate) title: Cow<'a, str>,
     #[serde(borrow, default)]
-    pub description: Cow<'a, str>,
+    pub(crate) description: Cow<'a, str>,
     #[serde(default)]
-    pub photos_count: u32,
+    pub(crate) photos_count: u32,
     #[serde(default)]
-    pub videos_count: u32,
+    pub(crate) videos_count: u32,
     #[serde(default, rename(deserialize = "collection_media_count"))]
-    pub total: u32,
+    pub(crate) total: u32,
 }
 
 #[derive(Deserialize)]
@@ -463,10 +562,19 @@ struct Curated<'a> {
 }
 
 /// Coleções em destaque (curadoria primeiro, depois os grupos temáticos), sem repetição.
-pub fn parse_collections(html: &[u8]) -> Result<Vec<Collection<'_>>> {
-    let d = serde_json::from_slice::<DiscoverPage<'_>>(next_data(html)?)?.props.page_props.initial_data;
+pub(crate) fn parse_collections(html: &[u8]) -> Result<Vec<Collection<'_>>> {
+    let d = serde_json::from_slice::<DiscoverPage<'_>>(next_data(html)?)?
+        .props
+        .page_props
+        .initial_data;
     let mut out: Vec<Collection<'_>> = Vec::new();
-    for c in d.curated.map(|c| c.data).unwrap_or_default().into_iter().chain(d.collections.into_iter().flatten()) {
+    for c in d
+        .curated
+        .map(|c| c.data)
+        .unwrap_or_default()
+        .into_iter()
+        .chain(d.collections.into_iter().flatten())
+    {
         if !out.iter().any(|o| o.slug == c.attributes.slug) {
             out.push(c.attributes);
         }
@@ -482,20 +590,57 @@ mod tests {
     const PHOTOS: &[u8] = include_bytes!("../tests/photos.html");
 
     fn shape(orientation: Option<&str>) -> Shape {
-        Shape { pick: Pick::for_orientation(orientation), photo_width: 2160, all_files: false }
+        Shape {
+            pick: Pick::for_orientation(orientation),
+            photo_width: 2160,
+            all_files: false,
+        }
     }
 
     #[test]
     fn search_url_encodes_validates_and_orders_filters() {
-        let f = Server { orientation: Some("portrait"), ..Server::default() };
+        let f = Server {
+            orientation: Some("portrait"),
+            ..Server::default()
+        };
         assert_eq!(search_url(Kind::Videos, " bull shark & río ", 0, &f).unwrap(), "https://www.pexels.com/search/videos/bull%20shark%20%26%20r%C3%ADo/?orientation=portrait");
-        assert_eq!(search_url(Kind::Photos, "a/b?c#d", 3, &Server::default()).unwrap(), "https://www.pexels.com/search/a%2Fb%3Fc%23d/?page=3");
-        assert_eq!(search_url(Kind::Photos, "ice", 1, &Server::default()).unwrap(), "https://www.pexels.com/search/ice/");
-        let all = Server { orientation: Some("landscape"), color: Some("0000ff"), people: Some("1"), age: Some("adult"), date_from: Some("last_year"), min_duration: Some(5), max_duration: Some(15) };
+        assert_eq!(
+            search_url(Kind::Photos, "a/b?c#d", 3, &Server::default()).unwrap(),
+            "https://www.pexels.com/search/a%2Fb%3Fc%23d/?page=3"
+        );
+        assert_eq!(
+            search_url(Kind::Photos, "ice", 1, &Server::default()).unwrap(),
+            "https://www.pexels.com/search/ice/"
+        );
+        let all = Server {
+            orientation: Some("landscape"),
+            color: Some("0000ff"),
+            people: Some("1"),
+            age: Some("adult"),
+            date_from: Some("last_year"),
+            min_duration: Some(5),
+            max_duration: Some(15),
+        };
         assert_eq!(search_url(Kind::Videos, "ice", 2, &all).unwrap(),
                    "https://www.pexels.com/search/videos/ice/?orientation=landscape&color=0000ff&people_count=1&people_age=adult&date_from=last_year&min_duration=5&max_duration=15&page=2");
-        for bad in [Server { orientation: Some("portrait&evil=1"), ..Server::default() }, Server { color: Some("blue"), ..Server::default() },
-                    Server { people: Some("1&x=2"), ..Server::default() }, Server { date_from: Some("a b"), ..Server::default() }] {
+        for bad in [
+            Server {
+                orientation: Some("portrait&evil=1"),
+                ..Server::default()
+            },
+            Server {
+                color: Some("blue"),
+                ..Server::default()
+            },
+            Server {
+                people: Some("1&x=2"),
+                ..Server::default()
+            },
+            Server {
+                date_from: Some("a b"),
+                ..Server::default()
+            },
+        ] {
             assert!(search_url(Kind::Videos, "x", 1, &bad).is_err(), "{bad:?}");
         }
         assert!(search_url(Kind::Videos, "   ", 1, &Server::default()).is_err());
@@ -503,17 +648,37 @@ mod tests {
 
     #[test]
     fn other_urls_reject_path_tricks() {
-        assert_eq!(media_url(Kind::Videos, 34956040), "https://www.pexels.com/video/x-34956040/");
-        assert_eq!(collection_url("/animals-h8stntd/", 2).unwrap(), "https://www.pexels.com/collections/animals-h8stntd/?page=2");
-        assert_eq!(user_url("@arthousestudio", 1).unwrap(), "https://www.pexels.com/@arthousestudio/");
-        assert!(collection_url("../admin", 1).is_err() && collection_url("a/b", 1).is_err() && user_url("a?b=1", 1).is_err() && user_url("", 1).is_err());
+        assert_eq!(
+            media_url(Kind::Videos, 34_956_040),
+            "https://www.pexels.com/video/x-34956040/"
+        );
+        assert_eq!(
+            collection_url("/animals-h8stntd/", 2).unwrap(),
+            "https://www.pexels.com/collections/animals-h8stntd/?page=2"
+        );
+        assert_eq!(
+            user_url("@arthousestudio", 1).unwrap(),
+            "https://www.pexels.com/@arthousestudio/"
+        );
+        assert!(
+            collection_url("../admin", 1).is_err()
+                && collection_url("a/b", 1).is_err()
+                && user_url("a?b=1", 1).is_err()
+                && user_url("", 1).is_err()
+        );
     }
 
     #[test]
     fn next_data_is_cut_out_or_reported() {
         assert_eq!(next_data(br#"<p>a</p><script id="__NEXT_DATA__" type="application/json" crossorigin="anonymous">{"a":1}</script><p>"#).unwrap(), br#"{"a":1}"#);
-        assert!(matches!(next_data(b"<html>Just a moment...</html>"), Err(Error::Layout(_))));
-        assert!(matches!(next_data(br#"<script id="__NEXT_DATA__">{"a":1}"#), Err(Error::Layout(_))));
+        assert!(matches!(
+            next_data(b"<html>Just a moment...</html>"),
+            Err(Error::Layout(_))
+        ));
+        assert!(matches!(
+            next_data(br#"<script id="__NEXT_DATA__">{"a":1}"#),
+            Err(Error::Layout(_))
+        ));
     }
 
     #[test]
@@ -521,15 +686,48 @@ mod tests {
         let l = parse_list(VIDEOS, &shape(Some("portrait"))).unwrap();
         assert_eq!((l.rows.len(), l.items), (2, 2));
         let r = &l.rows[0];
-        assert_eq!((r.id, r.kind, r.width, r.height), (39056886, "video", 1080, 1920));
-        assert_eq!(r.url, "https://videos.pexels.com/video-files/39056886/16620047_1080_1920_30fps.mp4");
-        assert_eq!((r.title.as_ref(), r.author.as_str(), r.duration, r.fps), ("Majestic Shark Swimming in Aquarium", "Tommy Shih", Some(14.0), Some(30.0)));
-        assert!(r.tags.iter().any(|t| t == "Aquarium") && r.page.ends_with("-39056886/") && r.files.is_empty() && r.created_at.is_some());
-        assert_eq!(l.pagination, Some(Pagination { current_page: 2, total_pages: 102, total_results: 2429 }));
+        assert_eq!(
+            (r.id, r.kind, r.width, r.height),
+            (39_056_886, "video", 1080, 1920)
+        );
+        assert_eq!(
+            r.url,
+            "https://videos.pexels.com/video-files/39056886/16620047_1080_1920_30fps.mp4"
+        );
+        assert_eq!(
+            (r.title.as_ref(), r.author.as_str(), r.duration, r.fps),
+            (
+                "Majestic Shark Swimming in Aquarium",
+                "Tommy Shih",
+                Some(14.0),
+                Some(30.0)
+            )
+        );
+        assert!(
+            r.tags.iter().any(|t| t == "Aquarium")
+                && r.page.ends_with("-39056886/")
+                && r.files.is_empty()
+                && r.created_at.is_some()
+        );
+        assert_eq!(
+            l.pagination,
+            Some(Pagination {
+                current_page: 2,
+                total_pages: 102,
+                total_results: 2429
+            })
+        );
         // alvo em paisagem: nenhum arquivo desses vídeos em retrato serve, mas a página tinha 2 itens
         let none = parse_list(VIDEOS, &shape(Some("landscape"))).unwrap();
         assert_eq!((none.rows.len(), none.items), (0, 2));
-        let all = parse_list(VIDEOS, &Shape { all_files: true, ..shape(Some("portrait")) }).unwrap();
+        let all = parse_list(
+            VIDEOS,
+            &Shape {
+                all_files: true,
+                ..shape(Some("portrait"))
+            },
+        )
+        .unwrap();
         assert_eq!(all.rows[0].files.len(), 4);
     }
 
@@ -537,46 +735,126 @@ mod tests {
     fn parses_real_photo_search_page_with_related_searches() {
         let l = parse_list(PHOTOS, &shape(None)).unwrap();
         assert_eq!(l.rows[0].url, "https://images.pexels.com/photos/5022610/pexels-photo-5022610.jpeg?auto=compress&cs=tinysrgb&w=2160");
-        assert_eq!((l.rows[0].kind, l.rows[0].width, l.rows[0].height, l.rows[0].duration), ("photo", 2160, 2880, None));
+        assert_eq!(
+            (
+                l.rows[0].kind,
+                l.rows[0].width,
+                l.rows[0].height,
+                l.rows[0].duration
+            ),
+            ("photo", 2160, 2880, None)
+        );
         assert_eq!(l.rows[0].author, "ArtHouse Studio");
-        let rel = parse_list(include_bytes!("../tests/related.html"), &shape(None)).unwrap().related;
-        assert_eq!(rel, vec![Related { term: "glaciers".into(), count: 12764 }, Related { term: "iceberg".into(), count: 4826 }]);
+        let rel = parse_list(include_bytes!("../tests/related.html"), &shape(None))
+            .unwrap()
+            .related;
+        assert_eq!(
+            rel,
+            vec![
+                Related {
+                    term: "glaciers".into(),
+                    count: 12764
+                },
+                Related {
+                    term: "iceberg".into(),
+                    count: 4826
+                }
+            ]
+        );
     }
 
     #[test]
     fn parses_real_detail_pages_with_stats_details_and_similar() {
-        let (row, similar) = parse_detail(include_bytes!("../tests/video_detail.html"), &Shape { all_files: true, ..shape(None) }).unwrap();
+        let (row, similar) = parse_detail(
+            include_bytes!("../tests/video_detail.html"),
+            &Shape {
+                all_files: true,
+                ..shape(None)
+            },
+        )
+        .unwrap();
         let r = row.unwrap();
-        assert_eq!((r.id, r.title.as_ref(), r.views, r.downloads, r.likes), (34956040, "Breathtaking Drone View of a Frozen Mountain Landscape", Some(258225), Some(949), Some(13)));
-        assert_eq!((r.files.len(), r.width, r.height), (6, 1920, 1080), "sem orientação pedida, um vídeo em paisagem sai em 1080p");
+        assert_eq!(
+            (r.id, r.title.as_ref(), r.views, r.downloads, r.likes),
+            (
+                34_956_040,
+                "Breathtaking Drone View of a Frozen Mountain Landscape",
+                Some(258_225),
+                Some(949),
+                Some(13)
+            )
+        );
+        assert_eq!(
+            (r.files.len(), r.width, r.height),
+            (6, 1920, 1080),
+            "sem orientação pedida, um vídeo em paisagem sai em 1080p"
+        );
         assert!(r.details.unwrap().get().contains("59.94"));
-        assert_eq!(similar.rows.iter().map(|s| s.id).collect::<Vec<_>>(), [34956041, 34956049]);
+        assert_eq!(
+            similar.rows.iter().map(|s| s.id).collect::<Vec<_>>(),
+            [34_956_041, 34_956_049]
+        );
         assert_eq!(similar.pagination.unwrap().total_results, 1031);
 
-        let (row, _) = parse_detail(include_bytes!("../tests/photo_detail.html"), &shape(None)).unwrap();
+        let (row, _) =
+            parse_detail(include_bytes!("../tests/photo_detail.html"), &shape(None)).unwrap();
         let r = row.unwrap();
-        assert_eq!((r.id, r.kind, r.views, r.downloads, r.likes), (5022610, "photo", Some(295929), Some(1012), Some(21)));
-        assert!(r.details.unwrap().get().contains("GFX 50S"), "EXIF repassado");
+        assert_eq!(
+            (r.id, r.kind, r.views, r.downloads, r.likes),
+            (5_022_610, "photo", Some(295_929), Some(1012), Some(21))
+        );
+        assert!(
+            r.details.unwrap().get().contains("GFX 50S"),
+            "EXIF repassado"
+        );
     }
 
     #[test]
     fn parses_real_collection_user_and_popular_pages() {
         let c = parse_list(include_bytes!("../tests/collection.html"), &shape(None)).unwrap();
-        assert_eq!(c.rows.iter().map(|r| (r.kind, r.id)).collect::<Vec<_>>(), [("photo", 11760851), ("photo", 12715260)]);
+        assert_eq!(
+            c.rows.iter().map(|r| (r.kind, r.id)).collect::<Vec<_>>(),
+            [("photo", 11_760_851), ("photo", 12_715_260)]
+        );
         assert_eq!(c.pagination.unwrap().total_results, 166);
         let u = parse_list(include_bytes!("../tests/user.html"), &shape(None)).unwrap();
-        assert_eq!(u.rows.iter().map(|r| (r.kind, r.id)).collect::<Vec<_>>(), [("video", 8515873), ("video", 8515872)]);
-        assert_eq!(u.pagination, Some(Pagination { current_page: 2, total_pages: 823, total_results: 9869 }));
+        assert_eq!(
+            u.rows.iter().map(|r| (r.kind, r.id)).collect::<Vec<_>>(),
+            [("video", 8_515_873), ("video", 8_515_872)]
+        );
+        assert_eq!(
+            u.pagination,
+            Some(Pagination {
+                current_page: 2,
+                total_pages: 823,
+                total_results: 9869
+            })
+        );
         let p = parse_list(include_bytes!("../tests/popular.html"), &shape(None)).unwrap();
-        assert_eq!(p.rows.iter().map(|r| r.id).collect::<Vec<_>>(), [39527910, 36550248]);
-        assert_eq!(p.pagination, Some(Pagination::default()), "populares usam cursor: sem páginas numeradas");
+        assert_eq!(
+            p.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
+            [39_527_910, 36_550_248]
+        );
+        assert_eq!(
+            p.pagination,
+            Some(Pagination::default()),
+            "populares usam cursor: sem páginas numeradas"
+        );
     }
 
     #[test]
     fn parses_real_discover_page_without_duplicates() {
         let cs = parse_collections(include_bytes!("../tests/discover.html")).unwrap();
         assert_eq!(cs[0].slug, "behind-the-camera-r7ttfbd");
-        assert_eq!((cs[0].title.as_ref(), cs[0].photos_count, cs[0].videos_count, cs[0].total), ("Behind The Camera", 71, 0, 71));
+        assert_eq!(
+            (
+                cs[0].title.as_ref(),
+                cs[0].photos_count,
+                cs[0].videos_count,
+                cs[0].total
+            ),
+            ("Behind The Camera", 71, 0, 71)
+        );
         assert!(cs.len() >= 4 && cs.iter().any(|c| c.slug == "stay-healthy-jmm4dr7"));
         let mut slugs: Vec<_> = cs.iter().map(|c| c.slug.as_ref()).collect();
         slugs.sort_unstable();
@@ -587,9 +865,21 @@ mod tests {
     #[test]
     fn rejects_pages_without_the_expected_block() {
         let empty = br#"<script id="__NEXT_DATA__">{"props":{"pageProps":{}}}</script>"#;
-        assert!(matches!(parse_list(empty, &shape(None)), Err(Error::Layout(_))));
-        assert!(matches!(parse_detail(empty, &shape(None)), Err(Error::Layout(_))));
-        assert!(matches!(parse_list(br#"<script id="__NEXT_DATA__">{"props":</script>"#, &shape(None)), Err(Error::Json(_))));
+        assert!(matches!(
+            parse_list(empty, &shape(None)),
+            Err(Error::Layout(_))
+        ));
+        assert!(matches!(
+            parse_detail(empty, &shape(None)),
+            Err(Error::Layout(_))
+        ));
+        assert!(matches!(
+            parse_list(
+                br#"<script id="__NEXT_DATA__">{"props":</script>"#,
+                &shape(None)
+            ),
+            Err(Error::Json(_))
+        ));
         assert!(parse_collections(empty).is_err());
     }
 }

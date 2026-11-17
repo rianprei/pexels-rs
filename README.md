@@ -35,4 +35,6 @@ target/release/pexels-rs help
 - Os termos de uso da Pexels não preveem acesso automatizado ao site.
 - Download só de `videos.pexels.com` e `images.pexels.com`.
 
+## Qualidade
+Revisado com a skill `rust-review` de [morganlinton/BeautifulRust](https://github.com/morganlinton/BeautifulRust) (MIT). O `Cargo.toml` adota o conjunto de lints dela na variante para aplicação: `clippy::pedantic`, sem `unwrap` fora de teste, sem conversão `as`, sem parâmetro booleano, sem `unsafe` (proibido). O erro implementa `std::error::Error` e preserva a causa (`source`).
 

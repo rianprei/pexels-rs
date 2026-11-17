@@ -2,11 +2,12 @@ use std::fmt;
 
 /// Tudo que pode dar errado, com mensagem pronta para o operador.
 #[derive(Debug)]
-pub enum Error {
+pub(crate) enum Error {
     Usage(String),
     /// Resposta HTTP com status de erro.
-    Status(u16, &'static str),
-    Transport(String),
+    Status(u32, &'static str),
+    /// Erro da libcurl (rede, TLS, tempo esgotado), com a causa preservada.
+    Curl(curl::Error),
     /// A página veio, mas não tem o formato esperado (a Pexels mudou o site ou bloqueou a requisição).
     Layout(&'static str),
     Json(serde_json::Error),
@@ -18,11 +19,28 @@ impl fmt::Display for Error {
         match self {
             Error::Usage(m) => write!(f, "{m}"),
             Error::Status(code, what) => write!(f, "{what}: HTTP {code}"),
-            Error::Transport(m) => write!(f, "falha de rede: {m}"),
+            Error::Curl(e) => write!(f, "falha de rede: {e}"),
             Error::Layout(m) => write!(f, "página em formato inesperado: {m}"),
             Error::Json(e) => write!(f, "JSON inválido: {e}"),
             Error::Io(path, e) => write!(f, "{path}: {e}"),
         }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Json(e) => Some(e),
+            Error::Curl(e) => Some(e),
+            Error::Io(_, e) => Some(e),
+            Error::Usage(_) | Error::Status(..) | Error::Layout(_) => None,
+        }
+    }
+}
+
+impl From<curl::Error> for Error {
+    fn from(e: curl::Error) -> Self {
+        Error::Curl(e)
     }
 }
 
@@ -32,4 +50,4 @@ impl From<serde_json::Error> for Error {
     }
 }
 
-pub type Result<T> = std::result::Result<T, Error>;
+pub(crate) type Result<T> = std::result::Result<T, Error>;
