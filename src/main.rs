@@ -254,7 +254,11 @@ fn list(source: &Source<'_>, o: &Opts<'_>) -> Result<()> {
         if hit_network {
             thread::sleep(PAUSE);
         }
-        let (body, from_network) = client.page(&url, key, cache)?;
+        let (body, from_network) = match client.page(&url, key, cache) {
+            // a Pexels anuncia mais páginas do que serve: 410 depois da primeira é fim dos resultados, não falha
+            Err(Error::Status(410, _)) if page > o.page => break,
+            r => r?,
+        };
         hit_network = from_network;
         let (rows, items, total_pages) = if api {
             let rows = api::parse(
